@@ -16,6 +16,8 @@ const okResp = {
   cuerpo: JSON.stringify({ routes: [{ summary: { travelTimeInSeconds: 3600, lengthInMeters: 60000 } }] }),
 };
 
+const textoEn = (hoja, rango) => hoja.formatos.filter((f) => f.rango === rango).map((f) => f.formato);
+
 test('tick measures both directions once per slot', () => {
   const s = crearSandbox({ ahora: TUE_1701, props: P, respuestas: [okResp, okResp] });
   s.ctx.setup(); s.ctx.tick(); s.ctx.tick();
@@ -31,6 +33,25 @@ test('tick measures both directions once per slot', () => {
   assert.equal(s.props.CONSULTAS, '2026-11-03|2');
   assert.ok(s.fetches[0].includes('-34.9,-57.9:-34.6,-58.3'));
   assert.ok(s.fetches[1].includes('-34.00,-58.00:-34.9,-57.9'));
+  // P6/P7: lock pedido sin espera y liberado una sola vez.
+  assert.deepEqual(s.lock.intentos, [0, 0]);
+  assert.equal(s.lock.liberaciones, 2);
+  assert.ok(rows.every((f) => !JSON.stringify(f).includes('APIKEY123')));
+});
+
+test('tick takes the lock with tryLock(0) and releases it exactly once', () => {
+  const s = crearSandbox({ ahora: TUE_1701, props: P, respuestas: [okResp, okResp] });
+  s.ctx.setup(); s.ctx.tick();
+  assert.deepEqual(s.lock.intentos, [0]);
+  assert.equal(s.lock.liberaciones, 1);
+});
+
+test('setup leaves fecha/franja as text (@) on mediciones B:B and D:D and viajes B:B', () => {
+  const s = crearSandbox({ ahora: TUE_1701, props: P });
+  s.ctx.setup();
+  assert.deepEqual(textoEn(s.objetos.mediciones, 'B:B'), ['@']);
+  assert.deepEqual(textoEn(s.objetos.mediciones, 'D:D'), ['@']);
+  assert.deepEqual(textoEn(s.objetos.viajes, 'B:B'), ['@']);
 });
 
 test('same HH:MM yesterday does not block today', () => {
@@ -78,6 +99,23 @@ test('daily cap reached: one error row, no fetch', () => {
   assert.equal(rows[0][4], '');
   assert.equal(s.fetches.length, 0);
   assert.equal(s.props.ULTIMA_FRANJA_MEDIDA, '2026-11-03 17:00');
+  assert.equal(rows[0][14], 'Tope diario de consultas alcanzado (1000)');
+  assert.deepEqual(s.lock.intentos, [0, 0]);
+  assert.equal(s.lock.liberaciones, 2);
+});
+
+test('counter at 999: exactly one fetch, the other direction gets a cap error row', () => {
+  const s = crearSandbox({
+    ahora: TUE_1701, props: Object.assign({}, P, { CONSULTAS: '2026-11-03|999' }), respuestas: [okResp, okResp],
+  });
+  s.ctx.setup(); s.ctx.tick();
+  assert.equal(s.fetches.length, 1);
+  const rows = s.hojas.mediciones.slice(1);
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0][4], 'ida'); assert.equal(rows[0][5], 3600);
+  assert.equal(rows[1][4], 'vuelta'); assert.equal(rows[1][5], '');
+  assert.equal(rows[1][14], 'Tope diario de consultas alcanzado (1000)');
+  assert.equal(s.props.CONSULTAS, '2026-11-03|1000');
 });
 
 test('fetch throws: error row without key', () => {
@@ -126,6 +164,83 @@ test('setup keeps other triggers and replaces stale tick triggers', () => {
   assert.deepEqual(s.triggers.map((t) => t.getHandlerFunction()).sort(), ['otra', 'tick']);
 });
 
+test('missing mediciones sheet: tick throws before any fetch or counter change', () => {
+  const s = crearSandbox({ ahora: TUE_1701, props: P, respuestas: [okResp, okResp] });
+  assert.throws(() => s.ctx.tick(), /Falta la hoja 'mediciones': corré setup\(\)/);
+  assert.equal(s.fetches.length, 0);
+  assert.equal(s.props.CONSULTAS, undefined);
+  assert.equal(s.props.ULTIMA_FRANJA_MEDIDA, undefined);
+  assert.equal(s.lock.liberaciones, 1);
+});
+
+test('tick adds rows and re-applies text format when fewer than 5 free rows remain', () => {
+  const s = crearSandbox({ ahora: TUE_1701, props: P, respuestas: [okResp, okResp] });
+  s.ctx.setup();
+  const hoja = s.objetos.mediciones;
+  while (s.hojas.mediciones.length < 996) s.hojas.mediciones.push([]);
+  assert.equal(hoja.getMaxRows(), 1000);
+  const antesB = textoEn(hoja, 'B:B').length;
+  const antesD = textoEn(hoja, 'D:D').length;
+  s.ctx.tick();
+  assert.deepEqual(hoja.insertadas, [{ despuesDe: 1000, cantidad: 1000 }]);
+  assert.equal(hoja.getMaxRows(), 2000);
+  assert.equal(textoEn(hoja, 'B:B').length, antesB + 1);
+  assert.equal(textoEn(hoja, 'D:D').length, antesD + 1);
+  assert.equal(s.fetches.length, 2);
+});
+
+test('tick does not add rows while 5 or more are free', () => {
+  const s = crearSandbox({ ahora: TUE_1701, props: P, respuestas: [okResp, okResp] });
+  s.ctx.setup();
+  while (s.hojas.mediciones.length < 995) s.hojas.mediciones.push([]);
+  s.ctx.tick();
+  assert.deepEqual(s.objetos.mediciones.insertadas, []);
+});
+
+test('probarAhora: one ida and one vuelta row on a Sunday, counts, does not mark the slot', () => {
+  const dom = new Date('2026-11-08T13:07:00Z'); // domingo 10:07 local
+  const s = crearSandbox({ ahora: dom, props: P, respuestas: [okResp, okResp] });
+  s.ctx.setup();
+  s.ctx.probarAhora();
+  const rows = s.hojas.mediciones.slice(1);
+  assert.equal(rows.length, 2);
+  assert.deepEqual(rows.map((r) => r[4]), ['ida', 'vuelta']);
+  assert.equal(rows[0][3], '10:00'); assert.equal(rows[0][2], 7);
+  assert.equal(rows[0][5], 3600);
+  assert.equal(s.fetches.length, 2);
+  assert.equal(s.props.CONSULTAS, '2026-11-08|2');
+  assert.equal(s.props.ULTIMA_FRANJA_MEDIDA, undefined);
+  assert.deepEqual(s.lock.intentos, []);
+  assert.ok(!JSON.stringify(rows).includes('APIKEY123'));
+  assert.ok(s.fetches.every((u) => u.includes('key=APIKEY123')));
+});
+
+test('probarAhora: error rows keep the key out, missing sheet or bad config throws', () => {
+  const boom = new Error('fallo https://api.tomtom.com/x?key=APIKEY123');
+  const s = crearSandbox({ ahora: TUE_1701, props: P, respuestas: [boom, okResp] });
+  s.ctx.setup(); s.ctx.probarAhora();
+  const rows = s.hojas.mediciones.slice(1);
+  assert.ok(!JSON.stringify(rows).includes('APIKEY123'));
+  assert.equal(rows[1][5], 3600);
+
+  const sinHoja = crearSandbox({ ahora: TUE_1701, props: P, respuestas: [okResp, okResp] });
+  assert.throws(() => sinHoja.ctx.probarAhora(), /Falta la hoja 'mediciones'/);
+  assert.equal(sinHoja.fetches.length, 0);
+
+  const mala = crearSandbox({ ahora: TUE_1701, props: Object.assign({}, P, { ORIGEN_LA_PLATA: 'x' }), respuestas: [okResp, okResp] });
+  mala.ctx.setup();
+  assert.throws(() => mala.ctx.probarAhora(), /ORIGEN_LA_PLATA/);
+  assert.equal(mala.fetches.length, 0);
+});
+
+test('registrarViaje writes the header row when viajes is new or empty', () => {
+  const s = crearSandbox({ ahora: TUE_1701, props: P });
+  s.ctx.registrarViaje('baje', 'ida'); // sin setup: la hoja se crea al vuelo
+  assert.deepEqual(s.hojas.viajes[0], [...s.ctx.COLUMNAS_VIAJES]);
+  assert.equal(s.hojas.viajes.length, 2);
+  assert.equal(s.hojas.viajes[1][2], 'baje');
+});
+
 test('registrarViaje', () => {
   const s = crearSandbox({ ahora: TUE_1701, props: P });
   s.ctx.setup();
@@ -154,4 +269,9 @@ test('Viajes.html has the four buttons wired to registrarViaje', () => {
   assert.ok(html.includes('google.script.run'));
   assert.ok(html.includes('registrarViaje'));
   assert.ok(html.includes('name="viewport"'));
+  // Sin doble toque: los botones se deshabilitan hasta que vuelve el handler.
+  assert.ok(html.includes('.disabled = '));
+  assert.ok(html.includes('botones(true)'));
+  assert.ok(html.includes('botones(false)'));
+  assert.equal((html.match(/<button /g) || []).length, 4);
 });

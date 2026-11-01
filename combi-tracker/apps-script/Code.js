@@ -23,6 +23,52 @@ function hojaMediciones_() {
   return SpreadsheetApp.getActive().getSheetByName('mediciones');
 }
 
+function hojaMedicionesObligatoria_() {
+  var hoja = hojaMediciones_();
+  if (!hoja) throw new Error("Falta la hoja 'mediciones': corré setup()");
+  return hoja;
+}
+
+// Texto plano para que Sheets no convierta fechas ni franjas ('17:00') en otros tipos.
+function formatoTextoMediciones_(hoja) {
+  hoja.getRange('B:B').setNumberFormat('@');
+  hoja.getRange('D:D').setNumberFormat('@');
+}
+
+// Las filas que Sheets agrega solas al pasar la fila 1000 no heredan el formato de columna:
+// se agregan filas a mano y se vuelve a aplicar el formato antes de escribir.
+function asegurarFilas_(hoja) {
+  if (hoja.getMaxRows() - hoja.getLastRow() < 5) {
+    hoja.insertRowsAfter(hoja.getMaxRows(), 1000);
+    formatoTextoMediciones_(hoja);
+  }
+}
+
+function mensajeTope_() {
+  return 'Tope diario de consultas alcanzado (' + TOPE_DIARIO + ')';
+}
+
+// Una consulta por sentido (ida y vuelta) y una fila por consulta. Devuelve el contador
+// de consultas actualizado; el que llama lo guarda.
+function medirSentidos_(hoja, cfg, ahora, consultas) {
+  ['ida', 'vuelta'].forEach(function (sentido) {
+    var ctxSentido = contextoAhora_(ahora, sentido);
+    if (consultas >= TOPE_DIARIO) {
+      hoja.appendRow(filaError(ctxSentido, '', mensajeTope_(), cfg.apiKey));
+      return;
+    }
+    var ruta = cfg.rutas[sentido];
+    try {
+      consultas += 1;
+      var resp = UrlFetchApp.fetch(construirUrl(ruta.origen, ruta.destino, cfg.apiKey), { muteHttpExceptions: true });
+      hoja.appendRow(filaMedicion(ctxSentido, resp.getResponseCode(), resp.getContentText(), cfg.apiKey));
+    } catch (e) {
+      hoja.appendRow(filaError(ctxSentido, '', e.message, cfg.apiKey));
+    }
+  });
+  return consultas;
+}
+
 // Se ejecuta cada 5 minutos; mide como máximo una vez por franja.
 function tick() {
   var lock = LockService.getScriptLock();
@@ -34,7 +80,8 @@ function tick() {
     var props = PropertiesService.getScriptProperties();
     var clave = claveFranja(ctx.fecha, ctx.franja);
     if (props.getProperty(PROP_ULTIMA_FRANJA_) === clave) return;
-    var hoja = hojaMediciones_();
+    var hoja = hojaMedicionesObligatoria_();
+    asegurarFilas_(hoja);
 
     var cfg = validarConfig(props.getProperties());
     if (!cfg.ok) {
@@ -45,27 +92,32 @@ function tick() {
 
     var consultas = leerContador(props.getProperty(PROP_CONSULTAS_), ctx.fecha);
     if (consultas >= TOPE_DIARIO) {
-      hoja.appendRow(filaError(ctx, '', 'Tope diario de consultas alcanzado (' + TOPE_DIARIO + ')', cfg.apiKey));
+      hoja.appendRow(filaError(ctx, '', mensajeTope_(), cfg.apiKey));
       props.setProperty(PROP_ULTIMA_FRANJA_, clave);
       return;
     }
 
-    ['ida', 'vuelta'].forEach(function (sentido) {
-      var ctxSentido = contextoAhora_(ahora, sentido);
-      var ruta = cfg.rutas[sentido];
-      try {
-        consultas += 1;
-        var resp = UrlFetchApp.fetch(construirUrl(ruta.origen, ruta.destino, cfg.apiKey), { muteHttpExceptions: true });
-        hoja.appendRow(filaMedicion(ctxSentido, resp.getResponseCode(), resp.getContentText(), cfg.apiKey));
-      } catch (e) {
-        hoja.appendRow(filaError(ctxSentido, '', e.message, cfg.apiKey));
-      }
-    });
+    consultas = medirSentidos_(hoja, cfg, ahora, consultas);
     props.setProperty(PROP_CONSULTAS_, escribirContador(ctx.fecha, consultas));
     props.setProperty(PROP_ULTIMA_FRANJA_, clave);
   } finally {
     lock.releaseLock();
   }
+}
+
+// Se corre a mano: una consulta de ida y una de vuelta, sin ventana horaria ni franja ya
+// medida ni lock. No marca la franja, pero suma al contador diario de consultas.
+function probarAhora() {
+  var hoja = hojaMedicionesObligatoria_();
+  var props = PropertiesService.getScriptProperties();
+  var cfg = validarConfig(props.getProperties());
+  if (!cfg.ok) throw new Error('Faltan o son inválidas: ' + cfg.faltantes.join(', '));
+  asegurarFilas_(hoja);
+  var ahora = new Date();
+  var fecha = contextoAhora_(ahora, '').fecha;
+  var consultas = medirSentidos_(hoja, cfg, ahora, leerContador(props.getProperty(PROP_CONSULTAS_), fecha));
+  props.setProperty(PROP_CONSULTAS_, escribirContador(fecha, consultas));
+  return 'Listo: 2 filas nuevas en mediciones (revisá la columna error)';
 }
 
 function hojaOCrear_(libro, nombre) {
@@ -85,9 +137,7 @@ function setup() {
 
   escribirEncabezadosSiVacia_(mediciones, COLUMNAS_MEDICIONES);
   escribirEncabezadosSiVacia_(viajes, COLUMNAS_VIAJES);
-  // Texto plano para que Sheets no convierta fechas ni franjas ('17:00') en otros tipos.
-  mediciones.getRange('B:B').setNumberFormat('@');
-  mediciones.getRange('D:D').setNumberFormat('@');
+  formatoTextoMediciones_(mediciones);
   viajes.getRange('B:B').setNumberFormat('@');
 
   cobertura.getRange(1, 1, 1, COLUMNAS_COBERTURA.length).setValues([COLUMNAS_COBERTURA]);
@@ -117,10 +167,11 @@ function registrarViaje(evento, sentido) {
   if (!validarViaje(evento, sentido)) throw new Error('Viaje inválido');
   var ctx = contextoAhora_(new Date(), sentido);
   var hoja = hojaOCrear_(SpreadsheetApp.getActive(), 'viajes');
+  escribirEncabezadosSiVacia_(hoja, COLUMNAS_VIAJES);
   hoja.appendRow([ctx.medidoEn, ctx.fecha, evento, sentido]);
   return 'Registrado: ' + evento + ' (' + sentido + ') ' + pad2_(ctx.hora) + ':' + pad2_(ctx.minuto);
 }
 
 if (typeof module !== 'undefined') {
-  module.exports = { tick, setup, doGet, registrarViaje, contextoAhora_ };
+  module.exports = { tick, setup, probarAhora, doGet, registrarViaje, contextoAhora_ };
 }

@@ -30,8 +30,19 @@ function formatearFecha(fecha, zona, patron) {
 function crearHoja(filas) {
   const hoja = {
     formatos: [], // [{ rango, formato }]
-    appendRow(fila) { filas.push(Array.from(fila)); },
+    maxFilas: 1000, // una hoja nueva de Sheets trae 1000 filas
+    insertadas: [], // [{ despuesDe, cantidad }]
+    appendRow(fila) {
+      filas.push(Array.from(fila));
+      // Sheets agrega filas solas al agregar al final, pero sin el formato de columna.
+      if (filas.length > hoja.maxFilas) hoja.maxFilas = filas.length;
+    },
     getLastRow() { return filas.length; },
+    getMaxRows() { return hoja.maxFilas; },
+    insertRowsAfter(despuesDe, cantidad) {
+      hoja.insertadas.push({ despuesDe, cantidad });
+      hoja.maxFilas += cantidad;
+    },
     getRange(a, b, c, d) {
       const esTexto = typeof a === 'string';
       const fila = esTexto ? Number((/\d+/.exec(a) || [1])[0]) : a;
@@ -59,6 +70,7 @@ function crearSandbox({ ahora, props = {}, respuestas = [], lockLibre = true }) 
   const objetosHoja = {};
   const fetches = [];
   const triggers = [];
+  const lock = { intentos: [], liberaciones: 0 };
   const propsVivas = Object.assign({}, props);
   const pendientes = respuestas.slice();
 
@@ -108,7 +120,10 @@ function crearSandbox({ ahora, props = {}, respuestas = [], lockLibre = true }) 
       },
     },
     LockService: {
-      getScriptLock: () => ({ tryLock: () => lockLibre, releaseLock: () => {} }),
+      getScriptLock: () => ({
+        tryLock: (ms) => { lock.intentos.push(ms); return lockLibre; },
+        releaseLock: () => { lock.liberaciones += 1; },
+      }),
     },
     ScriptApp: {
       getProjectTriggers: () => triggers.slice(),
@@ -131,7 +146,7 @@ function crearSandbox({ ahora, props = {}, respuestas = [], lockLibre = true }) 
   for (const archivo of ARCHIVOS) {
     vm.runInContext(fs.readFileSync(path.join(DIR, archivo), 'utf8'), ctx, { filename: archivo });
   }
-  return { ctx, hojas, fetches, triggers, props: propsVivas };
+  return { ctx, hojas, objetos: objetosHoja, fetches, triggers, lock, props: propsVivas };
 }
 
 module.exports = { crearSandbox };

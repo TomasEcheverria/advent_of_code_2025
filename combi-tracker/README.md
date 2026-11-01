@@ -20,6 +20,7 @@ Diseño completo: [`../docs/superpowers/specs/2026-11-01-combi-tracker-design.md
 
 1. Abrí la planilla **"Combi Tracker"** en tu Google Drive.
 2. En el menú de la planilla: **Extensiones** → **Apps Script**. Se abre el editor en otra pestaña.
+3. Volvé a la pestaña de la planilla y poné la zona horaria de la planilla: **Archivo** → **Configuración** → **Zona horaria** = **(GMT-03:00) Buenos Aires**. Es independiente de la zona del script (paso 4) y las fórmulas de la planilla usan esta.
 
 ## 4. Pegar el manifiesto `appsscript.json`
 
@@ -67,6 +68,9 @@ Todos los archivos están en `combi-tracker/apps-script/`. Los nombres en el edi
 2. En la barra superior elegí la función **`setup`** en el desplegable y tocá **Ejecutar**.
 3. La primera vez Google pide permisos: **Revisar permisos** → elegí tu cuenta → si aparece "Google no verificó esta app", tocá **Configuración avanzada** → **Ir a Combi Tracker (no seguro)** → **Permitir**. Es tu propio script.
 4. `setup()` crea las hojas `mediciones`, `cobertura` y `viajes` con sus encabezados, deja `fecha` y `franja` como texto en `mediciones`, y borra e instala de nuevo un disparador que ejecuta `tick` cada 5 minutos. Se puede volver a ejecutar sin duplicar nada.
+5. **No renombres ni borres las hojas** `mediciones`, `cobertura` y `viajes`: el código las busca por nombre. Si falta `mediciones`, `tick` falla con "Falta la hoja 'mediciones': corré setup()" y no consulta a TomTom.
+6. En **Activadores** (reloj, a la izquierda), abrí el de `tick` (lápiz) → **Configuración de notificaciones de errores** → **Notificarme de inmediato** (o, como mínimo, diariamente), así te enterás si deja de correr.
+7. Ejecutá **`probarAhora`** (mismo desplegable que `setup`) para verificar la clave y las coordenadas sin esperar al lunes: hace una consulta de ida y una de vuelta, en cualquier día y horario, y agrega 2 filas a `mediciones` con la franja real. Revisá que la columna `error` esté vacía. Cuenta para el tope diario de consultas, pero no marca la franja como medida.
 
 ## 8. Publicar la aplicación web (botones del celular)
 
@@ -77,6 +81,7 @@ Todos los archivos están en `combi-tracker/apps-script/`. Los nombres en el edi
    - **Quién tiene acceso**: solo yo.
 4. Tocá **Implementar** y copiá la **URL de la aplicación web**.
 5. Abrí esa URL en el navegador del celular (con tu cuenta de Google) y guardala como acceso directo en la pantalla de inicio (en Chrome: menú de tres puntos → **Agregar a la pantalla de inicio**).
+6. Si el celular tiene varias cuentas de Google, abrí la URL en un navegador o perfil donde esta cuenta sea la predeterminada; si no, Google puede mostrar un error de acceso aunque la aplicación esté bien publicada.
 
 Si más adelante cambiás el código, usá **Implementar** → **Administrar implementaciones** → lápiz → **Versión nueva**, para conservar la misma URL.
 
@@ -87,7 +92,7 @@ Primeras comprobaciones (el mismo día de la instalación):
 - [ ] En la planilla aparecen las 3 hojas: `mediciones`, `cobertura`, `viajes`.
 - [ ] En el editor, en **Activadores** (reloj, a la izquierda), hay uno para `tick`, "Según el tiempo", cada 5 minutos.
 - [ ] Esperá una franja hábil (lunes a viernes entre 05:40 y 21:00). Aparecen **2 filas** en `mediciones` (`ida` y `vuelta`), con `error` vacío. Cada franja nueva suma 2 filas más.
-- [ ] `cobertura` muestra la fecha de hoy. Mientras no exista la primera fila de `mediciones`, `cobertura!A2` muestra `#N/A`: es normal.
+- [ ] `cobertura` muestra la fecha de hoy. Mientras `mediciones` no tenga filas, `cobertura` queda vacía (sin errores).
 - [ ] En la página del celular, tocá un botón: aparece el mensaje "Registrado: ..." y una fila nueva en `viajes`.
 - [ ] En el editor, **Ejecuciones** (a la izquierda): las ejecuciones de `tick` y `setup` figuran como "Completada", sin errores.
 
@@ -95,9 +100,12 @@ Después del **primer día medido completo**:
 
 - [ ] En `cobertura`, `ok_ida` y `ok_vuelta` **no son 0** cuando `mediciones` tiene filas. Si dan 0, las fechas no coinciden por tipo de dato (la fórmula compara fechas como texto).
 - [ ] En `mediciones`, las columnas `fecha` (por ejemplo `2026-11-03`) y `franja` (por ejemplo `17:00`) siguen como **texto**: alineadas a la izquierda y sin convertirse en fecha ni en hora.
+- [ ] Pasadas unas 2 semanas (cerca de la fila 1000 de `mediciones`), `fecha` y `franja` siguen como **texto** en las filas nuevas. `tick` agrega 1000 filas y reaplica el formato cuando quedan menos de 5 libres; si no, hay que revisarlo a mano.
 - [ ] En una fila real, `medido_en` termina en `-03:00` y `dia_semana` es `1` si la medición fue un lunes (1 = lunes ... 5 = viernes).
 - [ ] Hay unas 94 filas por día en `mediciones` (47 franjas por 2 sentidos) y `cobertura` muestra al menos 95%.
 - [ ] La columna `error` está vacía en todas, salvo problemas reales de TomTom. Si una fila de error dice "Faltan o son inválidas: ...", revisá esas propiedades en el paso 6.
+
+Para el análisis posterior: puede haber filas repetidas para una misma medición, así que hay que **deduplicar por (`fecha`, `franja`, `sentido`)**.
 
 Criterio de terminado de la fase 1: 3 días hábiles seguidos con cobertura de al menos 95% y un viaje real registrado desde el celular.
 

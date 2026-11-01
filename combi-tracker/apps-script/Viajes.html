@@ -17,10 +17,15 @@
   <button onclick="enviar('baje', 'vuelta')">Bajé (vuelta)</button>
   <p id="msg"></p>
   <script>
+    function botones(deshabilitar) {
+      Array.prototype.forEach.call(document.querySelectorAll('button'), function (b) { b.disabled = deshabilitar; });
+    }
     function show(r) {
+      botones(false);
       document.getElementById('msg').textContent = (r && r.message) ? 'Error: ' + r.message : r;
     }
     function enviar(evento, sentido) {
+      botones(true);
       google.script.run.withSuccessHandler(show).withFailureHandler(show).registrarViaje(evento, sentido);
     }
   </script>

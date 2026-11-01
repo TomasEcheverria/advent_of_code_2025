@@ -89,6 +89,7 @@ function filaMedicion(ctx, estadoHttp, cuerpo, apiKey) {
   if (!r || typeof r !== 'object') {
     return filaError(ctx, estadoHttp, 'Sin rutas en la respuesta', apiKey);
   }
+  var sinTiempo = typeof r.travelTimeInSeconds !== 'number' || !isFinite(r.travelTimeInSeconds);
   return [
     ctx.medidoEn, ctx.fecha, ctx.diaSemana, ctx.franja, ctx.sentido,
     valorONada_(r.travelTimeInSeconds),
@@ -99,7 +100,7 @@ function filaMedicion(ctx, estadoHttp, cuerpo, apiKey) {
     valorONada_(r.lengthInMeters),
     valorONada_(r.departureTime),
     valorONada_(r.arrivalTime),
-    estadoHttp, '',
+    estadoHttp, sinTiempo ? 'Sin travelTimeInSeconds' : '',
   ];
 }
 
@@ -174,7 +175,7 @@ function formulasCobertura(filasEsperadas) {
       '",' + errores + ',"")))';
   };
   return {
-    A2: '=SORT(UNIQUE(FILTER(' + fechas + ',' + fechas + '<>"")),1,FALSE)',
+    A2: '=SORT(UNIQUE(IFERROR(FILTER(' + fechas + ',' + fechas + '<>""),"")),1,FALSE)',
     B2: porSentido('ida'),
     C2: porSentido('vuelta'),
     D2: '=ARRAYFORMULA(IF(A2:A="",,COUNTIFS(' + fechas + ',A2:A,' + errores + ',"<>")))',

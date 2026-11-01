@@ -24,6 +24,18 @@ test('filaMedicion missing optional field → empty cell', () => {
   assert.equal(filaMedicion(ctx, 200, JSON.stringify(body), 'K')[7], '');
 });
 
+test('filaMedicion 200 without numeric travelTimeInSeconds keeps fields and flags the error column', () => {
+  for (const malo of [undefined, null, '4200', 'x']) {
+    const body = JSON.parse(ok);
+    if (malo === undefined) delete body.routes[0].summary.travelTimeInSeconds; else body.routes[0].summary.travelTimeInSeconds = malo;
+    const f = filaMedicion(ctx, 200, JSON.stringify(body), 'K');
+    assert.equal(f[14], 'Sin travelTimeInSeconds');
+    assert.equal(f[6], 3300);
+    assert.equal(f[10], 61000);
+    assert.equal(f[13], 200);
+  }
+});
+
 test('filaMedicion http error uses TomTom message', () => {
   const r = filaMedicion(ctx, 403, JSON.stringify({ detailedError: { message: 'Forbidden key' } }), 'K');
   assert.equal(r[13], 403); assert.match(r[14], /Forbidden key/); assert.equal(r[5], '');
