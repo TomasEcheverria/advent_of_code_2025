@@ -52,7 +52,7 @@ Todos los archivos están en `combi-tracker/apps-script/`. Los nombres en el edi
 | `TOMTOM_API_KEY` | la key que copiaste en el paso 2 |
 | `ORIGEN_LA_PLATA` | `-34.000000,-57.000000` (esquina de La Plata donde subís) |
 | `DESTINO_CABA_IDA` | `-34.000000,-58.000000` (frente a tu trabajo, donde bajás en la ida) |
-| `ORIGEN_CABA_VUELTA` | `-34.000000,-58.000000` (parada frente al INCAA, donde subís en la vuelta) |
+| `ORIGEN_CABA_VUELTA` | `-34.000100,-58.000100` (parada donde subís en la vuelta) |
 
    Los valores de la tabla son **solo ejemplos de formato**. Reemplazalos por los reales (los que confirmaste en el mapa).
 

@@ -5,8 +5,8 @@ Estado: aprobado por el usuario (2026-11-01)
 
 ## Intención
 
-El usuario viaja casi todos los días hábiles entre La Plata y CABA en la combi
-"La Plata VIP", que tiene horarios fijos. Quiere saber qué salida conviene
+El usuario viaja casi todos los días hábiles entre La Plata y CABA en una
+combi que tiene horarios fijos. Quiere saber qué salida conviene
 tomar, sobre todo a la vuelta, para viajar más rápido y con menos tráfico. A
 futuro quiere un aviso diario del tipo "hoy conviene la de las 17:30".
 
@@ -18,7 +18,7 @@ diario y el análisis son fases posteriores que leen esos mismos datos.
 ## Objetivos
 
 - Medir el tiempo de viaje en auto con tráfico en vivo, ida y vuelta, cada
-  20 minutos, de lunes a viernes, de 05:30 a 21:00 (hora de Argentina).
+  20 minutos, de lunes a viernes, de 05:40 a 21:00 (hora de Argentina).
 - Guardar cada medición como una fila en Google Sheets, con datos crudos
   suficientes para analizar después (tiempo con tráfico, sin tráfico,
   histórico, demora, distancia).
@@ -49,7 +49,7 @@ diario y el análisis son fases posteriores que leen esos mismos datos.
 **Paradas** (dadas por el usuario):
 
 - Ida: sube en una esquina de La Plata y baja frente a su trabajo, en CABA.
-- Vuelta: sube frente al INCAA (Av. Belgrano y 9 de Julio, CABA) y baja en la
+- Vuelta: sube en CABA (parada de la vuelta) y baja en la
   misma esquina de La Plata.
 
 Las direcciones y coordenadas exactas **no se versionan**. Viven solo en las
@@ -61,7 +61,7 @@ plan no necesita un paso de geocodificación. Durante la instalación el
 usuario carga los valores confirmados en Script Properties.
 
 Decisión de Claude: los puntos de CABA quedan sobre el mismo lado de la
-9 de Julio en que para la combi (lado de la calle Lima). Así TomTom no arma un
+avenida en que para la combi. Así TomTom no arma un
 rodeo para cruzar la avenida.
 
 **Horarios de la combi** (lunes a viernes; se guardan en el código para fases
@@ -205,7 +205,7 @@ y la única señal es la ausencia; esta hoja la vuelve evidente.
 | `TOMTOM_API_KEY` | API key de TomTom |
 | `ORIGEN_LA_PLATA` | `lat,lon` de la esquina de La Plata |
 | `DESTINO_CABA_IDA` | `lat,lon` del trabajo (bajada de la ida) |
-| `ORIGEN_CABA_VUELTA` | `lat,lon` de la parada del INCAA |
+| `ORIGEN_CABA_VUELTA` | `lat,lon` de la parada de la vuelta en CABA |
 
 - Ida: `ORIGEN_LA_PLATA` → `DESTINO_CABA_IDA`.
 - Vuelta: `ORIGEN_CABA_VUELTA` → `ORIGEN_LA_PLATA`.

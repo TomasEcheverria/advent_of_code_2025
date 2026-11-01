@@ -9,7 +9,7 @@ const P = {
   TOMTOM_API_KEY: 'APIKEY123',
   ORIGEN_LA_PLATA: '-34.9,-57.9',
   DESTINO_CABA_IDA: '-34.6,-58.3',
-  ORIGEN_CABA_VUELTA: '-34.61,-58.38',
+  ORIGEN_CABA_VUELTA: '-34.00,-58.00',
 };
 const okResp = {
   codigo: 200,
@@ -30,7 +30,7 @@ test('tick measures both directions once per slot', () => {
   assert.equal(s.props.ULTIMA_FRANJA_MEDIDA, '2026-11-03 17:00');
   assert.equal(s.props.CONSULTAS, '2026-11-03|2');
   assert.ok(s.fetches[0].includes('-34.9,-57.9:-34.6,-58.3'));
-  assert.ok(s.fetches[1].includes('-34.61,-58.38:-34.9,-57.9'));
+  assert.ok(s.fetches[1].includes('-34.00,-58.00:-34.9,-57.9'));
 });
 
 test('same HH:MM yesterday does not block today', () => {

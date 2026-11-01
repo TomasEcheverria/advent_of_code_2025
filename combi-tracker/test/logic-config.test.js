@@ -4,7 +4,7 @@ const {
   normalizarCoordenada, validarConfig, leerContador, escribirContador, claveFranja, validarViaje,
 } = require('../apps-script/Logic.js');
 
-const P = { TOMTOM_API_KEY: 'K', ORIGEN_LA_PLATA: '-34.9, -57.9', DESTINO_CABA_IDA: '-34.6,-58.3', ORIGEN_CABA_VUELTA: '-34.61,-58.38' };
+const P = { TOMTOM_API_KEY: 'K', ORIGEN_LA_PLATA: '-34.9, -57.9', DESTINO_CABA_IDA: '-34.6,-58.3', ORIGEN_CABA_VUELTA: '-34.00,-58.00' };
 
 test('normalizarCoordenada', () => {
   assert.equal(normalizarCoordenada(' -34.9 , -57.9 '), '-34.9,-57.9');
@@ -26,7 +26,7 @@ test('validarConfig ok builds routes', () => {
   assert.equal(c.apiKey, 'K');
   assert.deepEqual(c.faltantes, []);
   assert.deepEqual(c.rutas.ida, { origen: '-34.9,-57.9', destino: '-34.6,-58.3' });
-  assert.deepEqual(c.rutas.vuelta, { origen: '-34.61,-58.38', destino: '-34.9,-57.9' });
+  assert.deepEqual(c.rutas.vuelta, { origen: '-34.00,-58.00', destino: '-34.9,-57.9' });
 });
 
 test('validarConfig lists missing and invalid', () => {
@@ -47,7 +47,7 @@ test('validarConfig keeps declaration order, trims key, fills rutas with nulls',
   assert.deepEqual(d.faltantes, ['TOMTOM_API_KEY', 'ORIGEN_LA_PLATA', 'DESTINO_CABA_IDA', 'ORIGEN_CABA_VUELTA']);
   const e = validarConfig({ ...P, DESTINO_CABA_IDA: 'x' });
   assert.deepEqual(e.rutas.ida, { origen: '-34.9,-57.9', destino: null });
-  assert.deepEqual(e.rutas.vuelta, { origen: '-34.61,-58.38', destino: '-34.9,-57.9' });
+  assert.deepEqual(e.rutas.vuelta, { origen: '-34.00,-58.00', destino: '-34.9,-57.9' });
 });
 
 test('contador resets on new day', () => {
