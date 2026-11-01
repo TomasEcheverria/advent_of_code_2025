@@ -103,9 +103,72 @@ function filaMedicion(ctx, estadoHttp, cuerpo, apiKey) {
   ];
 }
 
+var REGEX_NUMERO_ = /^-?\d+(\.\d+)?$/;
+var REGEX_CONTADOR_ = /^(\d{4}-\d{2}-\d{2})\|(\d+)$/;
+
+// 'lat,lon' decimal plano (sin espacios) con |lat| <= 90 y |lon| <= 180; si no, null.
+function normalizarCoordenada(texto) {
+  if (typeof texto !== 'string') return null;
+  var partes = texto.replace(/\s+/g, '').split(',');
+  if (partes.length !== 2) return null;
+  if (!REGEX_NUMERO_.test(partes[0]) || !REGEX_NUMERO_.test(partes[1])) return null;
+  var lat = Number(partes[0]);
+  var lon = Number(partes[1]);
+  if (!isFinite(lat) || !isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) return null;
+  return partes[0] + ',' + partes[1];
+}
+
+// Valida las Script Properties. `faltantes` conserva el orden de PROPS.
+// `rutas` siempre está presente; los valores inválidos o ausentes quedan en null.
+function validarConfig(props) {
+  var P = CONFIG_.PROPS;
+  var origen = props || {};
+  var clave = typeof origen[P.apiKey] === 'string' ? origen[P.apiKey].trim() : '';
+  var laPlata = normalizarCoordenada(origen[P.origenLaPlata]);
+  var cabaIda = normalizarCoordenada(origen[P.destinoCabaIda]);
+  var cabaVuelta = normalizarCoordenada(origen[P.origenCabaVuelta]);
+  var faltantes = [];
+  if (!clave) faltantes.push(P.apiKey);
+  if (laPlata === null) faltantes.push(P.origenLaPlata);
+  if (cabaIda === null) faltantes.push(P.destinoCabaIda);
+  if (cabaVuelta === null) faltantes.push(P.origenCabaVuelta);
+  return {
+    ok: faltantes.length === 0,
+    faltantes: faltantes,
+    apiKey: clave,
+    rutas: {
+      ida: { origen: laPlata, destino: cabaIda },
+      vuelta: { origen: cabaVuelta, destino: laPlata },
+    },
+  };
+}
+
+// Contador diario guardado como 'YYYY-MM-DD|n'. Otra fecha o valor mal formado: 0.
+function leerContador(valorGuardado, fecha) {
+  if (typeof valorGuardado !== 'string') return 0;
+  var m = REGEX_CONTADOR_.exec(valorGuardado);
+  if (!m || m[1] !== fecha) return 0;
+  return Number(m[2]);
+}
+
+function escribirContador(fecha, n) {
+  return fecha + '|' + n;
+}
+
+// Clave única por día y franja, 'YYYY-MM-DD HH:MM'.
+function claveFranja(fecha, franja) {
+  return fecha + ' ' + franja;
+}
+
+function validarViaje(evento, sentido) {
+  return (evento === 'subi' || evento === 'baje') && (sentido === 'ida' || sentido === 'vuelta');
+}
+
 if (typeof module !== 'undefined') {
   module.exports = {
     franjaPara, debeMedir, franjasDelDia,
     construirUrl, limpiarMensaje, filaMedicion, filaError,
+    normalizarCoordenada, validarConfig, leerContador, escribirContador,
+    claveFranja, validarViaje,
   };
 }
