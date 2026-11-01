@@ -29,6 +29,83 @@ function franjasDelDia(primera, ultima, intervalo) {
   return franjas;
 }
 
+// URL de TomTom Routing. `origen` y `destino` ya vienen normalizados como 'lat,lon'.
+function construirUrl(origen, destino, apiKey) {
+  return 'https://api.tomtom.com/routing/1/calculateRoute/' + origen + ':' + destino +
+    '/json?key=' + encodeURIComponent(apiKey) +
+    '&traffic=true&departAt=now&computeTravelTimeFor=all&travelMode=car' +
+    '&routeType=fastest&maxAlternatives=0';
+}
+
+// Oculta la clave (cruda y codificada) con '***' y recorta a MAX_LARGO_ERROR.
+function limpiarMensaje(mensaje, apiKey) {
+  var texto = String(mensaje);
+  if (apiKey) {
+    var clave = String(apiKey);
+    texto = texto.split(clave).join('***');
+    texto = texto.split(encodeURIComponent(clave)).join('***');
+  }
+  return texto.slice(0, CONFIG_.MAX_LARGO_ERROR);
+}
+
+// Fila de 15 columnas (orden de COLUMNAS_MEDICIONES) sin datos de la API.
+function filaError(ctx, estadoHttp, mensaje, apiKey) {
+  return [
+    ctx.medidoEn, ctx.fecha, ctx.diaSemana, ctx.franja, ctx.sentido,
+    '', '', '', '', '', '', '', '',
+    estadoHttp, limpiarMensaje(mensaje, apiKey),
+  ];
+}
+
+function parsearJson_(texto) {
+  try {
+    return JSON.parse(texto);
+  } catch (e) {
+    return null;
+  }
+}
+
+function valorONada_(v) {
+  return (v === undefined || v === null) ? '' : v;
+}
+
+// Convierte la respuesta de TomTom en una fila de medición (o de error).
+function filaMedicion(ctx, estadoHttp, cuerpo, apiKey) {
+  var datos = parsearJson_(cuerpo);
+  if (estadoHttp !== 200) {
+    var mensaje = 'HTTP ' + estadoHttp;
+    if (datos && datos.detailedError && datos.detailedError.message) {
+      mensaje = datos.detailedError.message;
+    } else if (datos && datos.error && datos.error.description) {
+      mensaje = datos.error.description;
+    }
+    return filaError(ctx, estadoHttp, mensaje, apiKey);
+  }
+  if (datos === null || typeof datos !== 'object') {
+    return filaError(ctx, estadoHttp, 'Respuesta inválida de TomTom', apiKey);
+  }
+  var ruta = datos.routes && datos.routes[0];
+  var r = ruta && ruta.summary;
+  if (!r || typeof r !== 'object') {
+    return filaError(ctx, estadoHttp, 'Sin rutas en la respuesta', apiKey);
+  }
+  return [
+    ctx.medidoEn, ctx.fecha, ctx.diaSemana, ctx.franja, ctx.sentido,
+    valorONada_(r.travelTimeInSeconds),
+    valorONada_(r.noTrafficTravelTimeInSeconds),
+    valorONada_(r.historicTrafficTravelTimeInSeconds),
+    valorONada_(r.liveTrafficIncidentsTravelTimeInSeconds),
+    valorONada_(r.trafficDelayInSeconds),
+    valorONada_(r.lengthInMeters),
+    valorONada_(r.departureTime),
+    valorONada_(r.arrivalTime),
+    estadoHttp, '',
+  ];
+}
+
 if (typeof module !== 'undefined') {
-  module.exports = { franjaPara, debeMedir, franjasDelDia };
+  module.exports = {
+    franjaPara, debeMedir, franjasDelDia,
+    construirUrl, limpiarMensaje, filaMedicion, filaError,
+  };
 }
