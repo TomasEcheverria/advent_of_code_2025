@@ -184,7 +184,7 @@ test('filaError shape', () => {
 - [ ] **Step 1: Write the failing tests**
 
 ```js
-const P = { TOMTOM_API_KEY: 'K', ORIGEN_LA_PLATA: '-34.9, -57.9', DESTINO_CABA_IDA: '-34.6,-58.3', ORIGEN_CABA_VUELTA: '-34.61,-58.38' };
+const P = { TOMTOM_API_KEY: 'K', ORIGEN_LA_PLATA: '-34.9, -57.9', DESTINO_CABA_IDA: '-34.6,-58.3', ORIGEN_CABA_VUELTA: '-34.00,-58.00' };
 test('normalizarCoordenada', () => {
   assert.equal(normalizarCoordenada(' -34.9 , -57.9 '), '-34.9,-57.9');
   for (const bad of ['abc', '-34.9', '-95,-57', '-34,-190', '', null]) assert.equal(normalizarCoordenada(bad), null);
@@ -193,7 +193,7 @@ test('validarConfig ok builds routes', () => {
   const c = validarConfig(P);
   assert.equal(c.ok, true);
   assert.deepEqual(c.rutas.ida, { origen: '-34.9,-57.9', destino: '-34.6,-58.3' });
-  assert.deepEqual(c.rutas.vuelta, { origen: '-34.61,-58.38', destino: '-34.9,-57.9' });
+  assert.deepEqual(c.rutas.vuelta, { origen: '-34.00,-58.00', destino: '-34.9,-57.9' });
 });
 test('validarConfig lists missing and invalid', () => {
   const c = validarConfig({ ...P, TOMTOM_API_KEY: '', DESTINO_CABA_IDA: 'x' });
