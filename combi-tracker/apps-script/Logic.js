@@ -164,11 +164,29 @@ function validarViaje(evento, sentido) {
   return (evento === 'subi' || evento === 'baje') && (sentido === 'ida' || sentido === 'vuelta');
 }
 
+// Fórmulas de la hoja `cobertura` (A2:E2). `filasEsperadas` = filas por día completo.
+function formulasCobertura(filasEsperadas) {
+  var fechas = 'mediciones!B2:B';
+  var sentidos = 'mediciones!E2:E';
+  var errores = 'mediciones!O2:O';
+  var porSentido = function (sentido) {
+    return '=ARRAYFORMULA(IF(A2:A="",,COUNTIFS(' + fechas + ',A2:A,' + sentidos + ',"' + sentido +
+      '",' + errores + ',"")))';
+  };
+  return {
+    A2: '=SORT(UNIQUE(FILTER(' + fechas + ',' + fechas + '<>"")),1,FALSE)',
+    B2: porSentido('ida'),
+    C2: porSentido('vuelta'),
+    D2: '=ARRAYFORMULA(IF(A2:A="",,COUNTIFS(' + fechas + ',A2:A,' + errores + ',"<>")))',
+    E2: '=ARRAYFORMULA(IF(A2:A="",,(B2:B+C2:C)/' + filasEsperadas + '))',
+  };
+}
+
 if (typeof module !== 'undefined') {
   module.exports = {
     franjaPara, debeMedir, franjasDelDia,
     construirUrl, limpiarMensaje, filaMedicion, filaError,
     normalizarCoordenada, validarConfig, leerContador, escribirContador,
-    claveFranja, validarViaje,
+    claveFranja, validarViaje, formulasCobertura,
   };
 }

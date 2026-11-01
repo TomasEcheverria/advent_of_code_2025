@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body { font-family: sans-serif; margin: 0; padding: 16px; }
+    button { display: block; width: 100%; font-size: 1.6rem; padding: 1.2rem; margin: 0 0 12px; }
+    #msg { font-size: 1.2rem; min-height: 2em; }
+  </style>
+</head>
+<body>
+  <button onclick="enviar('subi', 'ida')">Subí (ida)</button>
+  <button onclick="enviar('baje', 'ida')">Bajé (ida)</button>
+  <button onclick="enviar('subi', 'vuelta')">Subí (vuelta)</button>
+  <button onclick="enviar('baje', 'vuelta')">Bajé (vuelta)</button>
+  <p id="msg"></p>
+  <script>
+    function show(r) {
+      document.getElementById('msg').textContent = (r && r.message) ? 'Error: ' + r.message : r;
+    }
+    function enviar(evento, sentido) {
+      google.script.run.withSuccessHandler(show).withFailureHandler(show).registrarViaje(evento, sentido);
+    }
+  </script>
+</body>
+</html>
