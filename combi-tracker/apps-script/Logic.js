@@ -165,22 +165,47 @@ function validarViaje(evento, sentido) {
   return (evento === 'subi' || evento === 'baje') && (sentido === 'ida' || sentido === 'vuelta');
 }
 
-// Fórmulas de la hoja `cobertura` (A2:E2). `filasEsperadas` = filas por día completo.
-function formulasCobertura(filasEsperadas) {
-  var fechas = 'mediciones!B2:B';
-  var sentidos = 'mediciones!E2:E';
-  var errores = 'mediciones!O2:O';
-  var porSentido = function (sentido) {
-    return '=ARRAYFORMULA(IF(A2:A="",,COUNTIFS(' + fechas + ',A2:A,' + sentidos + ',"' + sentido +
-      '",' + errores + ',"")))';
-  };
-  return {
-    A2: '=SORT(UNIQUE(IFERROR(FILTER(' + fechas + ',' + fechas + '<>""),"")),1,FALSE)',
-    B2: porSentido('ida'),
-    C2: porSentido('vuelta'),
-    D2: '=ARRAYFORMULA(IF(A2:A="",,COUNTIFS(' + fechas + ',A2:A,' + errores + ',"<>")))',
-    E2: '=ARRAYFORMULA(IF(A2:A="",,(B2:B+C2:C)/' + filasEsperadas + '))',
-  };
+var REGEX_FRANJA_ = /^(\d{1,2}):(\d{2})(:\d{2})?$/;
+
+// Sheets puede convertir '05:40' en una hora y mostrarla como '5:40' (o '5:40:00'): vuelve
+// a 'HH:MM'. Cualquier otro texto se devuelve igual.
+function normalizarFranja(texto) {
+  var s = String(texto);
+  var m = REGEX_FRANJA_.exec(s);
+  if (!m) return s;
+  return pad2_(Number(m[1])) + ':' + m[2];
+}
+
+// Resumen diario para la hoja `cobertura`. `filas` = [fecha, franja, sentido, error] de
+// `mediciones`; `filasEsperadas` = filas por día completo. Cuenta franjas distintas (las
+// repeticiones de `probarAhora` no suman). Devuelve [fecha, okIda, okVuelta, errores,
+// cobertura] ordenado por fecha descendente.
+function resumenCobertura(filas, filasEsperadas) {
+  var dias = {};
+  var fechas = [];
+  filas.forEach(function (fila) {
+    var fecha = String(valorONada_(fila[0]));
+    if (fecha === '') return;
+    if (!Object.prototype.hasOwnProperty.call(dias, fecha)) {
+      dias[fecha] = { ida: {}, vuelta: {}, errores: 0 };
+      fechas.push(fecha);
+    }
+    var dia = dias[fecha];
+    if (String(valorONada_(fila[3])) !== '') {
+      dia.errores += 1;
+      return;
+    }
+    var sentido = String(valorONada_(fila[2]));
+    if (sentido === 'ida' || sentido === 'vuelta') dia[sentido][normalizarFranja(valorONada_(fila[1]))] = true;
+  });
+  fechas.sort();
+  fechas.reverse();
+  return fechas.map(function (fecha) {
+    var dia = dias[fecha];
+    var ida = Object.keys(dia.ida).length;
+    var vuelta = Object.keys(dia.vuelta).length;
+    return [fecha, ida, vuelta, dia.errores, (ida + vuelta) / filasEsperadas];
+  });
 }
 
 if (typeof module !== 'undefined') {
@@ -188,6 +213,6 @@ if (typeof module !== 'undefined') {
     franjaPara, debeMedir, franjasDelDia,
     construirUrl, limpiarMensaje, filaMedicion, filaError,
     normalizarCoordenada, validarConfig, leerContador, escribirContador,
-    claveFranja, validarViaje, formulasCobertura,
+    claveFranja, validarViaje, normalizarFranja, resumenCobertura,
   };
 }
