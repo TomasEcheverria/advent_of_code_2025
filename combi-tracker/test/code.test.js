@@ -152,8 +152,7 @@ test('setup is idempotent', () => {
   assert.deepEqual(s.hojas.mediciones[0], [...s.ctx.COLUMNAS_MEDICIONES]);
   assert.deepEqual(s.hojas.viajes[0], [...s.ctx.COLUMNAS_VIAJES]);
   assert.deepEqual(s.hojas.cobertura[0], [...s.ctx.COLUMNAS_COBERTURA]);
-  assert.ok(s.hojas.cobertura[1][4].includes('/94'));
-  assert.ok(s.hojas.cobertura[1][0].startsWith('=SORT('));
+  assert.equal(s.hojas.cobertura.length, 1);
 });
 
 test('setup keeps other triggers and replaces stale tick triggers', () => {

@@ -27,11 +27,37 @@ function formatearFecha(fecha, zona, patron) {
     (token, literal) => (literal !== undefined ? literal : valores[token]));
 }
 
+// Rango en A1 ('B:B', 'E2:E', 'A2') o numérico (fila, col, filas, cols) a {f, c, nf, nc}.
+// `nf` es Infinity cuando el rango no tiene fila final.
+function describirRango(a, b, c, d) {
+  if (typeof a !== 'string') return { f: a, c: b, nf: c === undefined ? 1 : c, nc: d === undefined ? 1 : d };
+  const m = /^([A-Z])(\d*)(?::([A-Z])(\d*))?$/.exec(a.toUpperCase());
+  const col = m[1].charCodeAt(0) - 64;
+  const f = m[2] ? Number(m[2]) : 1;
+  const ultimaCol = m[3] ? m[3].charCodeAt(0) - 64 : col;
+  const finito = !m[3] && m[2];
+  return { f, c: col, nf: finito ? 1 : (m[4] ? Number(m[4]) - f + 1 : Infinity), nc: ultimaCol - col + 1 };
+}
+
+// Como Sheets, una celda que no es de texto ('@') convierte '5:40' en una hora y la muestra
+// sin cero a la izquierda ('5:40').
+const REGEX_HORA = /^(\d{1,2}):(\d{2})$/;
+
 function crearHoja(filas) {
   const hoja = {
     formatos: [], // [{ rango, formato }]
+    reglas: [], // formatos efectivos por celda; gana el último que cubre la celda
+    escrituras: [], // [{ fila, col, valor, formato }]: formato de la celda al escribirla
+    formulas: [], // fórmulas escritas con setFormula
     maxFilas: 1000, // una hoja nueva de Sheets trae 1000 filas
     insertadas: [], // [{ despuesDe, cantidad }]
+    formatoDe(f, c) {
+      for (let i = hoja.reglas.length - 1; i >= 0; i -= 1) {
+        const r = hoja.reglas[i];
+        if (f >= r.f && f < r.f + r.nf && c >= r.c && c < r.c + r.nc) return r.formato;
+      }
+      return '';
+    },
     appendRow(fila) {
       filas.push(Array.from(fila));
       // Sheets agrega filas solas al agregar al final, pero sin el formato de columna.
@@ -44,21 +70,49 @@ function crearHoja(filas) {
       hoja.maxFilas += cantidad;
     },
     getRange(a, b, c, d) {
-      const esTexto = typeof a === 'string';
-      const fila = esTexto ? Number((/\d+/.exec(a) || [1])[0]) : a;
-      const col = esTexto ? a.toUpperCase().charCodeAt(0) - 64 : b;
+      const r = describirRango(a, b, c, d);
       const poner = (f, c2, valor) => {
+        const formato = hoja.formatoDe(f, c2);
+        hoja.escrituras.push({ fila: f, col: c2, valor, formato });
+        let guardado = valor;
+        const h = typeof valor === 'string' && formato !== '@' ? REGEX_HORA.exec(valor) : null;
+        if (h) guardado = String(Number(h[1])) + ':' + h[2];
         while (filas.length < f) filas.push([]);
         while (filas[f - 1].length < c2 - 1) filas[f - 1].push('');
-        filas[f - 1][c2 - 1] = valor;
+        filas[f - 1][c2 - 1] = guardado;
       };
       return {
         setValues(valores) {
-          valores.forEach((fv, i) => fv.forEach((v, j) => poner(fila + i, col + j, v)));
+          valores.forEach((fv, i) => fv.forEach((v, j) => poner(r.f + i, r.c + j, v)));
         },
-        setValue(v) { poner(fila, col, v); },
-        setFormula(f) { poner(fila, col, f); },
-        setNumberFormat(formato) { hoja.formatos.push({ rango: esTexto ? a : [a, b, c, d], formato }); },
+        setValue(v) { poner(r.f, r.c, v); },
+        setFormula(f) { hoja.formulas.push(f); poner(r.f, r.c, f); },
+        setNumberFormat(formato) {
+          hoja.formatos.push({ rango: typeof a === 'string' ? a : [a, b, c, d], formato });
+          hoja.reglas.push({ f: r.f, c: r.c, nf: r.nf, nc: r.nc, formato });
+        },
+        getDisplayValues() {
+          const salida = [];
+          for (let i = 0; i < r.nf; i += 1) {
+            const fila = [];
+            for (let j = 0; j < r.nc; j += 1) {
+              const v = (filas[r.f - 1 + i] || [])[r.c - 1 + j];
+              fila.push(v === undefined || v === null ? '' : String(v));
+            }
+            salida.push(fila);
+          }
+          return salida;
+        },
+        clearContent() {
+          for (let i = 0; i < filas.length; i += 1) if (filas[i] === undefined) filas[i] = [];
+          for (let i = 0; i < r.nf && r.f - 1 + i < filas.length; i += 1) {
+            for (let j = 0; j < r.nc; j += 1) {
+              if (r.c - 1 + j < filas[r.f - 1 + i].length) filas[r.f - 1 + i][r.c - 1 + j] = '';
+            }
+          }
+          // getLastRow() no cuenta las filas finales sin contenido.
+          while (filas.length > 0 && filas[filas.length - 1].every((v) => v === '' || v === undefined)) filas.pop();
+        },
       };
     },
   };

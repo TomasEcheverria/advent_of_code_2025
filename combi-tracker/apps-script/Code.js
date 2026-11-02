@@ -44,6 +44,20 @@ function asegurarFilas_(hoja) {
   }
 }
 
+// Agrega UNA fila al final de `hoja` como texto en las columnas `colsTexto` (números de
+// columna). Fija el formato '@' en esas celdas ANTES de escribir; si no, Sheets convierte
+// '05:40' en una hora aunque la columna sea de texto. No usa appendRow por eso.
+function agregarFilaTexto_(hoja, fila, colsTexto) {
+  var n = hoja.getLastRow() + 1;
+  colsTexto.forEach(function (col) { hoja.getRange(n, col).setNumberFormat('@'); });
+  hoja.getRange(n, 1, 1, fila.length).setValues([fila]);
+}
+
+// fecha (B) y franja (D) de `mediciones` como texto.
+function agregarMedicion_(hoja, fila) {
+  agregarFilaTexto_(hoja, fila, [2, 4]);
+}
+
 function mensajeTope_() {
   return 'Tope diario de consultas alcanzado (' + TOPE_DIARIO + ')';
 }
@@ -54,19 +68,28 @@ function medirSentidos_(hoja, cfg, ahora, consultas) {
   ['ida', 'vuelta'].forEach(function (sentido) {
     var ctxSentido = contextoAhora_(ahora, sentido);
     if (consultas >= TOPE_DIARIO) {
-      hoja.appendRow(filaError(ctxSentido, '', mensajeTope_(), cfg.apiKey));
+      agregarMedicion_(hoja, filaError(ctxSentido, '', mensajeTope_(), cfg.apiKey));
       return;
     }
     var ruta = cfg.rutas[sentido];
     try {
       consultas += 1;
       var resp = UrlFetchApp.fetch(construirUrl(ruta.origen, ruta.destino, cfg.apiKey), { muteHttpExceptions: true });
-      hoja.appendRow(filaMedicion(ctxSentido, resp.getResponseCode(), resp.getContentText(), cfg.apiKey));
+      agregarMedicion_(hoja, filaMedicion(ctxSentido, resp.getResponseCode(), resp.getContentText(), cfg.apiKey));
     } catch (e) {
-      hoja.appendRow(filaError(ctxSentido, '', e.message, cfg.apiKey));
+      agregarMedicion_(hoja, filaError(ctxSentido, '', e.message, cfg.apiKey));
     }
   });
   return consultas;
+}
+
+// Actualiza el resumen sin dejar que un fallo afecte la medición ni el lock.
+function actualizarCoberturaSegura_() {
+  try {
+    actualizarCobertura();
+  } catch (e) {
+    // El resumen se reconstruye entero en la próxima franja: no vale la pena interrumpir.
+  }
 }
 
 // Se ejecuta cada 5 minutos; mide como máximo una vez por franja.
@@ -85,21 +108,24 @@ function tick() {
 
     var cfg = validarConfig(props.getProperties());
     if (!cfg.ok) {
-      hoja.appendRow(filaError(ctx, '', 'Faltan o son inválidas: ' + cfg.faltantes.join(', '), cfg.apiKey));
+      agregarMedicion_(hoja, filaError(ctx, '', 'Faltan o son inválidas: ' + cfg.faltantes.join(', '), cfg.apiKey));
       props.setProperty(PROP_ULTIMA_FRANJA_, clave);
+      actualizarCoberturaSegura_();
       return;
     }
 
     var consultas = leerContador(props.getProperty(PROP_CONSULTAS_), ctx.fecha);
     if (consultas >= TOPE_DIARIO) {
-      hoja.appendRow(filaError(ctx, '', mensajeTope_(), cfg.apiKey));
+      agregarMedicion_(hoja, filaError(ctx, '', mensajeTope_(), cfg.apiKey));
       props.setProperty(PROP_ULTIMA_FRANJA_, clave);
+      actualizarCoberturaSegura_();
       return;
     }
 
     consultas = medirSentidos_(hoja, cfg, ahora, consultas);
     props.setProperty(PROP_CONSULTAS_, escribirContador(ctx.fecha, consultas));
     props.setProperty(PROP_ULTIMA_FRANJA_, clave);
+    actualizarCoberturaSegura_();
   } finally {
     lock.releaseLock();
   }
@@ -128,7 +154,54 @@ function escribirEncabezadosSiVacia_(hoja, columnas) {
   if (hoja.getLastRow() === 0) hoja.appendRow(columnas);
 }
 
-// Se corre a mano una vez: crea hojas, encabezados, fórmulas y el disparador.
+// Reconstruye la hoja `cobertura` (A2:E) con valores calculados acá, no con fórmulas.
+// Se puede correr a mano; tick la llama después de cada franja medida.
+function actualizarCobertura() {
+  var libro = SpreadsheetApp.getActive();
+  var mediciones = libro.getSheetByName('mediciones');
+  if (!mediciones) throw new Error("Falta la hoja 'mediciones': corré setup()");
+  var cobertura = libro.getSheetByName('cobertura');
+  if (!cobertura) throw new Error("Falta la hoja 'cobertura': corré setup()");
+
+  var filas = [];
+  var ultima = mediciones.getLastRow();
+  if (ultima >= 2) {
+    // getDisplayValues: lo que se ve, sin depender de cómo Sheets convirtió cada celda.
+    filas = mediciones.getRange(2, 1, ultima - 1, COLUMNAS_MEDICIONES.length).getDisplayValues()
+      .map(function (f) { return [f[1], f[3], f[4], f[14]]; });
+  }
+  var filasEsperadas = 2 * franjasDelDia(PRIMERA_FRANJA, ULTIMA_FRANJA, INTERVALO_MIN).length;
+  var resumen = resumenCobertura(filas, filasEsperadas);
+
+  // clearContent también borra las fórmulas viejas que hayan quedado.
+  var maxFilas = cobertura.getMaxRows();
+  if (maxFilas > 1) cobertura.getRange(2, 1, maxFilas - 1, COLUMNAS_COBERTURA.length).clearContent();
+  if (resumen.length > 0) {
+    cobertura.getRange(2, 1, resumen.length, 1).setNumberFormat('@');
+    cobertura.getRange(2, 1, resumen.length, COLUMNAS_COBERTURA.length).setValues(resumen);
+  }
+  cobertura.getRange('E2:E').setNumberFormat('0%');
+}
+
+// Repara las filas existentes de `mediciones`: fecha (B) y franja (D) como texto y la franja
+// otra vez como 'HH:MM'. Se puede correr a mano; no cambia nada si ya está bien.
+function normalizarMediciones() {
+  var hoja = hojaMedicionesObligatoria_();
+  var ultima = hoja.getLastRow();
+  if (ultima < 2) return;
+  var cantidad = ultima - 1;
+  var rangoFecha = hoja.getRange(2, 2, cantidad, 1);
+  var rangoFranja = hoja.getRange(2, 4, cantidad, 1);
+  var fechas = rangoFecha.getDisplayValues();
+  var franjas = rangoFranja.getDisplayValues().map(function (f) { return [normalizarFranja(f[0])]; });
+  rangoFecha.setNumberFormat('@');
+  rangoFranja.setNumberFormat('@');
+  rangoFecha.setValues(fechas);
+  rangoFranja.setValues(franjas);
+}
+
+// Se corre a mano: crea hojas, encabezados y el disparador, y repara/reconstruye los datos
+// existentes. Se puede volver a correr sin duplicar nada.
 function setup() {
   var libro = SpreadsheetApp.getActive();
   var mediciones = hojaOCrear_(libro, 'mediciones');
@@ -141,19 +214,14 @@ function setup() {
   viajes.getRange('B:B').setNumberFormat('@');
 
   cobertura.getRange(1, 1, 1, COLUMNAS_COBERTURA.length).setValues([COLUMNAS_COBERTURA]);
-  var filasEsperadas = 2 * franjasDelDia(PRIMERA_FRANJA, ULTIMA_FRANJA, INTERVALO_MIN).length;
-  var f = formulasCobertura(filasEsperadas);
-  cobertura.getRange('A2').setFormula(f.A2);
-  cobertura.getRange('B2').setFormula(f.B2);
-  cobertura.getRange('C2').setFormula(f.C2);
-  cobertura.getRange('D2').setFormula(f.D2);
-  cobertura.getRange('E2').setFormula(f.E2);
-  cobertura.getRange('E2:E').setNumberFormat('0%');
 
   ScriptApp.getProjectTriggers().forEach(function (t) {
     if (t.getHandlerFunction() === 'tick') ScriptApp.deleteTrigger(t);
   });
   ScriptApp.newTrigger('tick').timeBased().everyMinutes(5).create();
+
+  normalizarMediciones();
+  actualizarCobertura();
 }
 
 function doGet(e) {
@@ -168,10 +236,13 @@ function registrarViaje(evento, sentido) {
   var ctx = contextoAhora_(new Date(), sentido);
   var hoja = hojaOCrear_(SpreadsheetApp.getActive(), 'viajes');
   escribirEncabezadosSiVacia_(hoja, COLUMNAS_VIAJES);
-  hoja.appendRow([ctx.medidoEn, ctx.fecha, evento, sentido]);
+  agregarFilaTexto_(hoja, [ctx.medidoEn, ctx.fecha, evento, sentido], [2]);
   return 'Registrado: ' + evento + ' (' + sentido + ') ' + pad2_(ctx.hora) + ':' + pad2_(ctx.minuto);
 }
 
 if (typeof module !== 'undefined') {
-  module.exports = { tick, setup, probarAhora, doGet, registrarViaje, contextoAhora_ };
+  module.exports = {
+    tick, setup, probarAhora, doGet, registrarViaje, contextoAhora_,
+    actualizarCobertura, normalizarMediciones,
+  };
 }
