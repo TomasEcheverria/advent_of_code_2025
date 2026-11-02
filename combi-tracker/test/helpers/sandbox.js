@@ -42,6 +42,14 @@ function describirRango(a, b, c, d) {
 // Como Sheets, una celda que no es de texto ('@') convierte '5:40' en una hora y la muestra
 // sin cero a la izquierda ('5:40').
 const REGEX_HORA = /^(\d{1,2}):(\d{2})$/;
+const REGEX_FECHA = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+// Serial de Sheets (días desde 1899-12-30) de una fecha ISO, con aritmética UTC.
+const serialDeFecha = (iso) => {
+  const m = REGEX_FECHA.exec(iso);
+  return Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])) / 86400000 + 25569;
+};
+const fechaDeSerial = (serial) => new Date((serial - 25569) * 86400000).toISOString().slice(0, 10);
 
 function crearHoja(filas) {
   const hoja = {
@@ -51,6 +59,22 @@ function crearHoja(filas) {
     formulas: [], // fórmulas escritas con setFormula
     maxFilas: 1000, // una hoja nueva de Sheets trae 1000 filas
     insertadas: [], // [{ despuesDe, cantidad }]
+    // Valor numérico subyacente de las celdas que Sheets convirtió en hora o fecha:
+    // 'f,c' -> { tipo: 'hora'|'fecha', serial }. Con formato '@' la celda muestra el serial.
+    numericos: {},
+    lecturas: [], // [{ f, c, nf, nc }] de cada getDisplayValues
+    // Deja en la celda una hora (fracción de día) o una fecha (serial) como la dejaría Sheets.
+    celdaNumerica(f, c, tipo, serial) {
+      while (filas.length < f) filas.push([]);
+      while (filas[f - 1].length < c - 1) filas[f - 1].push('');
+      if (tipo === 'hora') {
+        const min = Math.round(serial * 1440);
+        filas[f - 1][c - 1] = String(Math.floor(min / 60)) + ':' + String(min % 60).padStart(2, '0');
+      } else {
+        filas[f - 1][c - 1] = fechaDeSerial(serial);
+      }
+      hoja.numericos[f + ',' + c] = { tipo, serial };
+    },
     formatoDe(f, c) {
       for (let i = hoja.reglas.length - 1; i >= 0; i -= 1) {
         const r = hoja.reglas[i];
@@ -71,12 +95,21 @@ function crearHoja(filas) {
     },
     getRange(a, b, c, d) {
       const r = describirRango(a, b, c, d);
+      if (typeof a !== 'string' && r.f + r.nf - 1 > hoja.maxFilas) {
+        throw new Error('El rango queda fuera de los límites de la hoja (' + hoja.maxFilas + ' filas)');
+      }
       const poner = (f, c2, valor) => {
         const formato = hoja.formatoDe(f, c2);
         hoja.escrituras.push({ fila: f, col: c2, valor, formato });
         let guardado = valor;
         const h = typeof valor === 'string' && formato !== '@' ? REGEX_HORA.exec(valor) : null;
-        if (h) guardado = String(Number(h[1])) + ':' + h[2];
+        delete hoja.numericos[f + ',' + c2];
+        if (h) {
+          guardado = String(Number(h[1])) + ':' + h[2];
+          hoja.numericos[f + ',' + c2] = { tipo: 'hora', serial: (Number(h[1]) * 60 + Number(h[2])) / 1440 };
+        } else if (typeof valor === 'string' && formato !== '@' && REGEX_FECHA.test(valor)) {
+          hoja.numericos[f + ',' + c2] = { tipo: 'fecha', serial: serialDeFecha(valor) };
+        }
         while (filas.length < f) filas.push([]);
         while (filas[f - 1].length < c2 - 1) filas[f - 1].push('');
         filas[f - 1][c2 - 1] = guardado;
@@ -92,11 +125,19 @@ function crearHoja(filas) {
           hoja.reglas.push({ f: r.f, c: r.c, nf: r.nf, nc: r.nc, formato });
         },
         getDisplayValues() {
+          hoja.lecturas.push({ f: r.f, c: r.c, nf: r.nf, nc: r.nc });
           const salida = [];
           for (let i = 0; i < r.nf; i += 1) {
             const fila = [];
             for (let j = 0; j < r.nc; j += 1) {
-              const v = (filas[r.f - 1 + i] || [])[r.c - 1 + j];
+              const f2 = r.f + i;
+              const c2 = r.c + j;
+              const num = hoja.numericos[f2 + ',' + c2];
+              if (num && hoja.formatoDe(f2, c2) === '@') {
+                fila.push(String(num.serial)); // formato texto: Sheets muestra el serial crudo
+                continue;
+              }
+              const v = (filas[f2 - 1] || [])[c2 - 1];
               fila.push(v === undefined || v === null ? '' : String(v));
             }
             salida.push(fila);
@@ -108,6 +149,7 @@ function crearHoja(filas) {
           for (let i = 0; i < r.nf && r.f - 1 + i < filas.length; i += 1) {
             for (let j = 0; j < r.nc; j += 1) {
               if (r.c - 1 + j < filas[r.f - 1 + i].length) filas[r.f - 1 + i][r.c - 1 + j] = '';
+              delete hoja.numericos[(r.f + i) + ',' + (r.c + j)];
             }
           }
           // getLastRow() no cuenta las filas finales sin contenido.
@@ -124,7 +166,8 @@ function crearSandbox({ ahora, props = {}, respuestas = [], lockLibre = true }) 
   const objetosHoja = {};
   const fetches = [];
   const triggers = [];
-  const lock = { intentos: [], liberaciones: 0 };
+  const lock = { intentos: [], esperas: [], liberaciones: 0 };
+  const consola = { errores: [] };
   const propsVivas = Object.assign({}, props);
   const pendientes = respuestas.slice();
 
@@ -176,6 +219,10 @@ function crearSandbox({ ahora, props = {}, respuestas = [], lockLibre = true }) 
     LockService: {
       getScriptLock: () => ({
         tryLock: (ms) => { lock.intentos.push(ms); return lockLibre; },
+        waitLock: (ms) => {
+          lock.esperas.push(ms);
+          if (!lockLibre) throw new Error('Tiempo de espera agotado: no se pudo obtener el bloqueo');
+        },
         releaseLock: () => { lock.liberaciones += 1; },
       }),
     },
@@ -194,13 +241,14 @@ function crearSandbox({ ahora, props = {}, respuestas = [], lockLibre = true }) 
     },
     HtmlService: { createHtmlOutputFromFile: (n) => salida(n) },
     Utilities: { formatDate: formatearFecha },
+    console: { error: (m) => { consola.errores.push(String(m)); }, log() {}, warn() {} },
   };
 
   const ctx = vm.createContext(entorno);
   for (const archivo of ARCHIVOS) {
     vm.runInContext(fs.readFileSync(path.join(DIR, archivo), 'utf8'), ctx, { filename: archivo });
   }
-  return { ctx, hojas, objetos: objetosHoja, fetches, triggers, lock, props: propsVivas };
+  return { ctx, hojas, objetos: objetosHoja, fetches, triggers, lock, consola, props: propsVivas };
 }
 
 module.exports = { crearSandbox };

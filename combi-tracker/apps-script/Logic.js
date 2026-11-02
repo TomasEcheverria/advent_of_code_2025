@@ -166,14 +166,35 @@ function validarViaje(evento, sentido) {
 }
 
 var REGEX_FRANJA_ = /^(\d{1,2}):(\d{2})(:\d{2})?$/;
+var REGEX_FRACCION_ = /^(0?\.\d+|0)$/;
+var REGEX_SERIAL_DIA_ = /^\d{5}$/;
 
-// Sheets puede convertir '05:40' en una hora y mostrarla como '5:40' (o '5:40:00'): vuelve
-// a 'HH:MM'. Cualquier otro texto se devuelve igual.
+// Sheets puede convertir '05:40' en una hora y mostrarla como '5:40' (o '5:40:00'); en una
+// celda ya con formato de texto muestra la fracción de día cruda ('0.2361111111111111').
+// Vuelve a 'HH:MM'. Cualquier otro texto se devuelve igual.
 function normalizarFranja(texto) {
   var s = String(texto);
   var m = REGEX_FRANJA_.exec(s);
-  if (!m) return s;
-  return pad2_(Number(m[1])) + ':' + m[2];
+  if (m) return pad2_(Number(m[1])) + ':' + m[2];
+  if (REGEX_FRACCION_.test(s)) {
+    var minutos = Math.min(Math.round(Number(s) * 1440), 1439);
+    return pad2_(Math.floor(minutos / 60)) + ':' + pad2_(minutos % 60);
+  }
+  return s;
+}
+
+// Sheets cuenta los días desde 1899-12-30; 25569 es el serial de 1970-01-01.
+var SERIAL_EPOCH_UNIX_ = 25569;
+
+// Una celda de fecha con formato de texto muestra el serial crudo ('46328'). Lo convierte a
+// 'YYYY-MM-DD' con aritmética UTC pura (nunca un Date de getValues: tiene desfases
+// históricos). Fechas ISO y cualquier otro texto se devuelven igual.
+function normalizarFecha(texto) {
+  var s = String(texto);
+  if (!REGEX_SERIAL_DIA_.test(s)) return s;
+  var serial = Number(s);
+  if (serial < 30000 || serial > 60000) return s;
+  return new Date((serial - SERIAL_EPOCH_UNIX_) * 86400000).toISOString().slice(0, 10);
 }
 
 // Resumen diario para la hoja `cobertura`. `filas` = [fecha, franja, sentido, error] de
@@ -213,6 +234,6 @@ if (typeof module !== 'undefined') {
     franjaPara, debeMedir, franjasDelDia,
     construirUrl, limpiarMensaje, filaMedicion, filaError,
     normalizarCoordenada, validarConfig, leerContador, escribirContador,
-    claveFranja, validarViaje, normalizarFranja, resumenCobertura,
+    claveFranja, validarViaje, normalizarFranja, normalizarFecha, resumenCobertura,
   };
 }

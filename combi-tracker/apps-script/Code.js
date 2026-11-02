@@ -47,8 +47,11 @@ function asegurarFilas_(hoja) {
 // Agrega UNA fila al final de `hoja` como texto en las columnas `colsTexto` (números de
 // columna). Fija el formato '@' en esas celdas ANTES de escribir; si no, Sheets convierte
 // '05:40' en una hora aunque la columna sea de texto. No usa appendRow por eso.
+// No es atómica (lee la última fila y después escribe): quien la llama debe tener el lock.
 function agregarFilaTexto_(hoja, fila, colsTexto) {
   var n = hoja.getLastRow() + 1;
+  // getRange más allá de la última fila de la hoja falla: se agregan filas antes de escribir.
+  if (n > hoja.getMaxRows()) hoja.insertRowsAfter(hoja.getMaxRows(), 1000);
   colsTexto.forEach(function (col) { hoja.getRange(n, col).setNumberFormat('@'); });
   hoja.getRange(n, 1, 1, fila.length).setValues([fila]);
 }
@@ -89,6 +92,8 @@ function actualizarCoberturaSegura_() {
     actualizarCobertura();
   } catch (e) {
     // El resumen se reconstruye entero en la próxima franja: no vale la pena interrumpir.
+    // Solo el mensaje: nada de esto toca la API key.
+    console.error('actualizarCobertura: ' + e.message);
   }
 }
 
@@ -131,19 +136,37 @@ function tick() {
   }
 }
 
+// Pide el lock del script y espera hasta 30 s. Devuelve el lock (hay que liberarlo en un
+// finally) o lanza un error claro si otra ejecución lo sigue teniendo.
+function tomarLockEsperando_() {
+  var lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(30000);
+  } catch (e) {
+    throw new Error('El sistema está ocupado con otra ejecución, probá de nuevo en un momento');
+  }
+  return lock;
+}
+
 // Se corre a mano: una consulta de ida y una de vuelta, sin ventana horaria ni franja ya
-// medida ni lock. No marca la franja, pero suma al contador diario de consultas.
+// medida. No marca la franja, pero suma al contador diario de consultas. Toma el lock para
+// no pisarse con tick (filas y contador).
 function probarAhora() {
-  var hoja = hojaMedicionesObligatoria_();
-  var props = PropertiesService.getScriptProperties();
-  var cfg = validarConfig(props.getProperties());
-  if (!cfg.ok) throw new Error('Faltan o son inválidas: ' + cfg.faltantes.join(', '));
-  asegurarFilas_(hoja);
-  var ahora = new Date();
-  var fecha = contextoAhora_(ahora, '').fecha;
-  var consultas = medirSentidos_(hoja, cfg, ahora, leerContador(props.getProperty(PROP_CONSULTAS_), fecha));
-  props.setProperty(PROP_CONSULTAS_, escribirContador(fecha, consultas));
-  return 'Listo: 2 filas nuevas en mediciones (revisá la columna error)';
+  var lock = tomarLockEsperando_();
+  try {
+    var hoja = hojaMedicionesObligatoria_();
+    var props = PropertiesService.getScriptProperties();
+    var cfg = validarConfig(props.getProperties());
+    if (!cfg.ok) throw new Error('Faltan o son inválidas: ' + cfg.faltantes.join(', '));
+    asegurarFilas_(hoja);
+    var ahora = new Date();
+    var fecha = contextoAhora_(ahora, '').fecha;
+    var consultas = medirSentidos_(hoja, cfg, ahora, leerContador(props.getProperty(PROP_CONSULTAS_), fecha));
+    props.setProperty(PROP_CONSULTAS_, escribirContador(fecha, consultas));
+    return 'Listo: 2 filas nuevas en mediciones (revisá la columna error)';
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 function hojaOCrear_(libro, nombre) {
@@ -167,8 +190,10 @@ function actualizarCobertura() {
   var ultima = mediciones.getLastRow();
   if (ultima >= 2) {
     // getDisplayValues: lo que se ve, sin depender de cómo Sheets convirtió cada celda.
-    filas = mediciones.getRange(2, 1, ultima - 1, COLUMNAS_MEDICIONES.length).getDisplayValues()
-      .map(function (f) { return [f[1], f[3], f[4], f[14]]; });
+    // Solo las columnas que hacen falta: fecha..sentido (B:E) y error (O).
+    var base = mediciones.getRange(2, 2, ultima - 1, 4).getDisplayValues();
+    var errores = mediciones.getRange(2, 15, ultima - 1, 1).getDisplayValues();
+    filas = base.map(function (f, i) { return [normalizarFecha(f[0]), f[2], f[3], errores[i][0]]; });
   }
   var filasEsperadas = 2 * franjasDelDia(PRIMERA_FRANJA, ULTIMA_FRANJA, INTERVALO_MIN).length;
   var resumen = resumenCobertura(filas, filasEsperadas);
@@ -183,21 +208,37 @@ function actualizarCobertura() {
   cobertura.getRange('E2:E').setNumberFormat('0%');
 }
 
-// Repara las filas existentes de `mediciones`: fecha (B) y franja (D) como texto y la franja
-// otra vez como 'HH:MM'. Se puede correr a mano; no cambia nada si ya está bien.
-function normalizarMediciones() {
-  var hoja = hojaMedicionesObligatoria_();
+// Repara columnas de `hoja` (filas 2 en adelante) como texto. `columnas` = [{ col, normalizar }].
+// ORDEN: primero se leen TODOS los valores mostrados y recién después se fija el formato '@';
+// una celda numérica (hora, fecha) con formato texto muestra su serial crudo ('0.236…', '46328').
+// Las funciones `normalizar` también arreglan ese caso si el formato ya estaba puesto.
+function repararColumnasTexto_(hoja, columnas) {
   var ultima = hoja.getLastRow();
   if (ultima < 2) return;
-  var cantidad = ultima - 1;
-  var rangoFecha = hoja.getRange(2, 2, cantidad, 1);
-  var rangoFranja = hoja.getRange(2, 4, cantidad, 1);
-  var fechas = rangoFecha.getDisplayValues();
-  var franjas = rangoFranja.getDisplayValues().map(function (f) { return [normalizarFranja(f[0])]; });
-  rangoFecha.setNumberFormat('@');
-  rangoFranja.setNumberFormat('@');
-  rangoFecha.setValues(fechas);
-  rangoFranja.setValues(franjas);
+  var rangos = columnas.map(function (c) { return hoja.getRange(2, c.col, ultima - 1, 1); });
+  var valores = rangos.map(function (r, i) {
+    return r.getDisplayValues().map(function (f) { return [columnas[i].normalizar(f[0])]; });
+  });
+  rangos.forEach(function (r, i) {
+    r.setNumberFormat('@');
+    r.setValues(valores[i]);
+  });
+}
+
+// Repara las filas existentes de `mediciones`: fecha (B) como 'YYYY-MM-DD' y franja (D) como
+// 'HH:MM', las dos como texto. Se puede correr a mano; no cambia nada si ya está bien.
+function normalizarMediciones() {
+  repararColumnasTexto_(hojaMedicionesObligatoria_(), [
+    { col: 2, normalizar: normalizarFecha },
+    { col: 4, normalizar: normalizarFranja },
+  ]);
+}
+
+// Repara la fecha (B) de las filas existentes de `viajes`, igual que normalizarMediciones.
+function normalizarViajes() {
+  var hoja = SpreadsheetApp.getActive().getSheetByName('viajes');
+  if (!hoja) throw new Error("Falta la hoja 'viajes': corré setup()");
+  repararColumnasTexto_(hoja, [{ col: 2, normalizar: normalizarFecha }]);
 }
 
 // Se corre a mano: crea hojas, encabezados y el disparador, y repara/reconstruye los datos
@@ -210,6 +251,11 @@ function setup() {
 
   escribirEncabezadosSiVacia_(mediciones, COLUMNAS_MEDICIONES);
   escribirEncabezadosSiVacia_(viajes, COLUMNAS_VIAJES);
+
+  // Primero reparar lo existente (lee lo que se ve) y recién después fijar el formato de
+  // texto: al revés, las horas y fechas ya convertidas quedarían como '0.236…' y '46328'.
+  normalizarMediciones();
+  normalizarViajes();
   formatoTextoMediciones_(mediciones);
   viajes.getRange('B:B').setNumberFormat('@');
 
@@ -220,7 +266,6 @@ function setup() {
   });
   ScriptApp.newTrigger('tick').timeBased().everyMinutes(5).create();
 
-  normalizarMediciones();
   actualizarCobertura();
 }
 
@@ -230,19 +275,25 @@ function doGet(e) {
     .addMetaTag('viewport', 'width=device-width, initial-scale=1');
 }
 
-// La llama la página del celular con google.script.run.
+// La llama la página del celular con google.script.run. Varias llamadas pueden llegar a la
+// vez: el lock evita que dos escriban en la misma fila.
 function registrarViaje(evento, sentido) {
-  if (!validarViaje(evento, sentido)) throw new Error('Viaje inválido');
-  var ctx = contextoAhora_(new Date(), sentido);
-  var hoja = hojaOCrear_(SpreadsheetApp.getActive(), 'viajes');
-  escribirEncabezadosSiVacia_(hoja, COLUMNAS_VIAJES);
-  agregarFilaTexto_(hoja, [ctx.medidoEn, ctx.fecha, evento, sentido], [2]);
-  return 'Registrado: ' + evento + ' (' + sentido + ') ' + pad2_(ctx.hora) + ':' + pad2_(ctx.minuto);
+  var lock = tomarLockEsperando_();
+  try {
+    if (!validarViaje(evento, sentido)) throw new Error('Viaje inválido');
+    var ctx = contextoAhora_(new Date(), sentido);
+    var hoja = hojaOCrear_(SpreadsheetApp.getActive(), 'viajes');
+    escribirEncabezadosSiVacia_(hoja, COLUMNAS_VIAJES);
+    agregarFilaTexto_(hoja, [ctx.medidoEn, ctx.fecha, evento, sentido], [2]);
+    return 'Registrado: ' + evento + ' (' + sentido + ') ' + pad2_(ctx.hora) + ':' + pad2_(ctx.minuto);
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 if (typeof module !== 'undefined') {
   module.exports = {
     tick, setup, probarAhora, doGet, registrarViaje, contextoAhora_,
-    actualizarCobertura, normalizarMediciones,
+    actualizarCobertura, normalizarMediciones, normalizarViajes,
   };
 }
